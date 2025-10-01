@@ -1,0 +1,188 @@
+:root {
+    --cell-size: 100px;
+    --board-color: #333;
+    --cursor-color: yellow;
+    --player1-color: #007bff;
+    /* 青 */
+    --player2-color: #dc3545;
+    /* 赤 */
+}
+
+body {
+    /* 盤面を中央揃えにするための修正 */
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    min-height: 100vh;
+    background-color: #f4f4f4;
+    margin: 0;
+    font-family: sans-serif;
+}
+
+#game-container {
+    text-align: center;
+    background: white;
+    padding: 20px;
+    border-radius: 10px;
+    box-shadow: 0 4px 8px rgba(0, 0, 0, 0.1);
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+}
+
+#board {
+    display: grid;
+    grid-template-columns: repeat(3, var(--cell-size));
+    grid-template-rows: repeat(3, var(--cell-size));
+    gap: 0;
+    margin: 20px auto;
+    border: 3px solid var(--board-color);
+}
+
+.cell {
+    width: var(--cell-size);
+    height: var(--cell-size);
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    font-size: 48px;
+    font-weight: bold;
+    cursor: pointer;
+    background-color: #eee;
+    transition: background-color 0.1s, transform 0.1s;
+    border: 1px solid #ccc;
+    position: relative;
+    box-sizing: border-box;
+}
+
+/* 選択中のセル */
+.cell.selected {
+    background-color: var(--cursor-color);
+    transform: scale(1.05);
+    border: 3px solid black;
+    z-index: 10;
+}
+
+/* 〇 (青) のスタイル */
+.cell.O {
+    color: var(--player1-color);
+}
+
+.cell.O::before {
+    content: '〇';
+}
+
+/* ✕ (赤) のスタイル */
+.cell.X {
+    color: var(--player2-color);
+}
+
+.cell.X::before {
+    content: '✕';
+}
+
+/* --- 段階に応じた見た目の変化 (数字の表示と不透明度) --- */
+
+/* 数字表示用の擬似要素 */
+.cell[data-step]::after {
+    position: absolute;
+    font-size: 24px;
+    /* 数字の大きさ */
+    font-weight: 900;
+    top: 5px;
+    /* 位置調整 */
+    right: 5px;
+    color: black;
+    /* 数字の色 */
+    opacity: 0.9;
+    /* transition: opacity 0.5s; /* 視覚的変化を滑らかに */
+}
+
+/* --- ここを修正 --- */
+
+/* data-step の値に応じて表示する数字を設定 */
+.cell[data-step="1"]::after {
+    content: '1';
+}
+
+/* 最古 */
+.cell[data-step="2"]::after {
+    content: '2';
+}
+
+.cell[data-step="3"]::after {
+    content: '3';
+}
+
+/* 最新 */
+
+/* data-step の値に応じてマークと数字全体の不透明度を調整 */
+.cell[data-step="1"] {
+    opacity: 0.5;
+}
+
+/* 最古 = 最も薄い */
+.cell[data-step="3"] {
+    opacity: 1.0;
+}
+
+/* 最新 = 最も濃い */
+
+/* --- 次に消えるマークの視覚的強調 --- */
+
+@keyframes fadeOutBlink {
+
+    /* data-step="1" のマークを強調 */
+    0%,
+    100% {
+        opacity: 0.2;
+    }
+
+    50% {
+        opacity: 1.0;
+    }
+}
+
+/* 次に消えるマーク (data-step="1" のマーク) に適用されるスタイル */
+.cell.fading-out {
+    animation: fadeOutBlink 1s infinite alternate;
+    border: 3px solid red;
+}
+
+.cell.fading-out::after {
+    /* 点滅しているマークの数字（'1'）を強調 */
+    color: red;
+    opacity: 1.0;
+}
+
+
+/* その他のスタイル (変更なし) */
+#status {
+    min-height: 50px;
+}
+
+#player-turn {
+    font-size: 24px;
+    font-weight: bold;
+}
+
+#player-turn.player1 {
+    color: var(--player1-color);
+}
+
+#player-turn.player2 {
+    color: var(--player2-color);
+}
+
+#reset-button {
+    padding: 10px 20px;
+    font-size: 16px;
+    cursor: pointer;
+    margin-top: 10px;
+}
+
+#gamepad-status {
+    margin-top: 10px;
+    font-size: 14px;
+    color: gray;
+}
