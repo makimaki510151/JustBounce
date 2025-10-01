@@ -1,313 +1,433 @@
-const cells = document.querySelectorAll('.cell');
-const statusDisplay = document.getElementById('player-turn');
-const countInfoDisplay = document.getElementById('count-info');
-const gamepadStatusDisplay = document.getElementById('gamepad-status');
-const resetButton = document.getElementById('reset-button');
+const box = document.getElementById('box');
+const arrow = document.getElementById('arrow');
+const BOX_SIZE = 50; // ボックスのサイズ (CSSと合わせる)
 
-// ゲームの状態
-let board = Array(9).fill(null);
-let currentPlayer = 'O'; // 'O' (青/Player 1) or 'X' (赤/Player 2)
-let isGameActive = true;
-const maxMarks = 3;
-let marksCount = { 'O': 0, 'X': 0 };
-// placedMarks: { index: number, player: string } のみを保持
-let placedMarks = [];
+const LAUNCH_MULTIPLIER = 0.8; // 引っ張った距離に対する発射力の倍率
+const FRICTION = 0.99;        // 減速係数
 
-// コントローラー関連
-const gamepads = {};
-let cursorIndex = 4; // 初期カーソル位置
-let lastStickPos = { x: 0, y: 0 };
-const stickThreshold = 0.5; // スティック感度
-const stickDelay = 200; // カーソル移動の最短間隔 (ms)
-let lastMoveTime = 0;
+let isDragging = false;
+let startX, startY;     // マウス押下時の画面座標
+let launchCenterInitialX, launchCenterInitialY; // 発射の起点となるボックスの中心座標
+let boxCurrentX, boxCurrentY; // マウス押下時のボックスの左上隅の座標
 
-// Gamepad APIイベントリスナー
-window.addEventListener("gamepadconnected", (e) => {
-    gamepads[e.gamepad.index] = e.gamepad;
-    gamepadStatusDisplay.textContent = `ゲームパッド ${e.gamepad.index + 1} が接続されました: ${e.gamepad.id}`;
-    updateCursor(cursorIndex);
-    if (!Object.keys(gamepads).some(i => gamepads[i].__loopStarted)) {
-        gameLoop();
-        gamepads[e.gamepad.index].__loopStarted = true;
-    }
-});
+let velocityX = 0;
+let velocityY = 0;
+// 💡 変更: requestAnimationFrameのIDではなく、setIntervalのIDを使用
+let intervalId = null; 
 
-window.addEventListener("gamepaddisconnected", (e) => {
-    delete gamepads[e.gamepad.index];
-    const connectedCount = navigator.getGamepads().filter(g => g).length;
-    gamepadStatusDisplay.textContent = connectedCount > 0
-        ? `${connectedCount}つのゲームパッドが接続されています`
-        : "ゲームパッドを接続してください...";
-});
+// =======================================================
+// カウンター関連
+// =======================================================
+let reboundCount = 0; // 跳ね返り回数を保持する変数
+const reboundCounterElement = document.getElementById('rebound-counter'); // HTML要素を取得
 
-// ゲームループ（コントローラーの状態監視用）
-function gameLoop() {
-    if (!isGameActive) return;
-
-    const currentGamepads = navigator.getGamepads();
-
-    // プレイヤー1 (O) の操作 (Gamepad index 0)
-    const gp1 = currentGamepads[0];
-    if (gp1) {
-        // O のカーソル移動を許可（AボタンはhandleGamepadInput内でターンチェック）
-        handleGamepadInput(gp1, 0);
-    }
-
-    // プレイヤー2 (X) の操作 (Gamepad index 1)
-    const gp2 = currentGamepads[1];
-    if (gp2 && currentGamepads.length > 1) {
-        // X のカーソル移動を許可（AボタンはhandleGamepadInput内でターンチェック）
-        handleGamepadInput(gp2, 1);
-    }
-
-    requestAnimationFrame(gameLoop);
+function updateReboundCountDisplay() {
+    reboundCounterElement.textContent = reboundCount;
 }
 
-// コントローラー入力の処理 (変更なし)
-function handleGamepadInput(gp, playerIndex) {
-    if (!isGameActive) return;
+// 💡 変更点 A: 初期化データ
+// =======================================================
+const NUM_OF_BLUE_BALLS = 10; // 生成されるボールの個数
 
-    const currentTime = Date.now();
 
-    const playerMark = playerIndex === 0 ? 'O' : 'X';
+// ボールの初期位置をランダムに生成する関数 (変更なし)
+function generateRandomPositions(count, boxSize) {
+    const positions = [];
+    const minDistanceSq = (boxSize * 1.5) ** 2; 
+    const radius = boxSize / 2;
+    const containerWidth = window.innerWidth;
+    const containerHeight = window.innerHeight;
+    
+    const redBoxCenter = {
+        x: containerWidth / 2,
+        y: containerHeight / 2
+    };
 
-    // 修正: 現在のプレイヤーのターンではない場合、Aボタン確定もカーソル移動もすべてブロック
-    if (playerMark !== currentPlayer) {
-        // ただし、ブロックする前に、ボタンの押しっぱなし状態だけはリセットしておく
-        // これがないと、ターンが回ってきた瞬間に意図せず確定処理が走る可能性がある
-        if (gp.buttons[0].pressed) {
-            gp.__button0Pressed = true;
-        } else {
-            gp.__button0Pressed = false;
+    let attempts = 0;
+    while (positions.length < count && attempts < count * 1000) {
+        attempts++;
+
+        const x = radius + Math.random() * (containerWidth - boxSize);
+        const y = radius + Math.random() * (containerHeight - boxSize);
+        const newPos = { x, y };
+
+        let isValid = true;
+
+        // 1. 赤ボックスとの衝突判定
+        const dxRed = newPos.x - redBoxCenter.x;
+        const dyRed = newPos.y - redBoxCenter.y;
+        if (dxRed * dxRed + dyRed * dyRed < minDistanceSq) {
+            isValid = false;
         }
-        return; // ★ ターンが一致しない場合はここで処理を終了
-    }
 
-    // 以下の処理は、playerMark === currentPlayer の場合のみ実行される
-
-    // Aボタン (buttons[0]) で確定
-    if (gp.buttons[0].pressed && !gp.__button0Pressed) {
-        handleCellClick(cursorIndex);
-        gp.__button0Pressed = true;
-    } else if (!gp.buttons[0].pressed) {
-        gp.__button0Pressed = false;
-    }
-
-    // カーソル移動の処理
-    if (currentTime - lastMoveTime > stickDelay) {
-        let newIndex = cursorIndex;
-        let moved = false;
-
-        // ... (以下、カーソル移動ロジックは変更なし) ...
-
-        // **左スティック (axes[0]: x, axes[1]: y)**
-        const lx = gp.axes[0];
-        const ly = gp.axes[1];
-
-        // **十字キー (D-Pad)**: 標準マッピングではbuttons[12]:Up, [13]:Down, [14]:Left, [15]:Right
-        const dpadUp = gp.buttons[12] && gp.buttons[12].pressed;
-        const dpadDown = gp.buttons[13] && gp.buttons[13].pressed;
-        const dpadLeft = gp.buttons[14] && gp.buttons[14].pressed;
-        const dpadRight = gp.buttons[15] && gp.buttons[15].pressed;
-
-        let moveX = 0;
-        let moveY = 0;
-
-        if (lx > stickThreshold || dpadRight) moveX = 1;
-        else if (lx < -stickThreshold || dpadLeft) moveX = -1;
-
-        if (ly > stickThreshold || dpadDown) moveY = 1;
-        else if (ly < -stickThreshold || dpadUp) moveY = -1;
-
-        lastStickPos.x = lx;
-        lastStickPos.y = ly;
-
-        if (moveX !== 0 || moveY !== 0) {
-            newIndex += moveX;
-            newIndex += moveY * 3;
-
-            // 境界チェックロジック (簡略化)
-            const currentRow = Math.floor(cursorIndex / 3);
-            const newRow = Math.floor(newIndex / 3);
-            const currentColumn = cursorIndex % 3;
-            const newColumn = newIndex % 3;
-
-            if (Math.abs(currentRow - newRow) > 1 || Math.abs(currentColumn - newColumn) > 1) {
-                newIndex = cursorIndex;
-                if (moveX === 1 && currentColumn < 2) newIndex++;
-                if (moveX === -1 && currentColumn > 0) newIndex--;
-                if (moveY === 1 && currentRow < 2) newIndex += 3;
-                if (moveY === -1 && currentRow > 0) newIndex -= 3;
-            }
-
-            if (newIndex >= 0 && newIndex <= 8 && newIndex !== cursorIndex) {
-                updateCursor(newIndex);
-                lastMoveTime = currentTime;
+        // 2. 既存の青いボールとの衝突判定
+        if (isValid) {
+            for (const existingPos of positions) {
+                const dx = newPos.x - existingPos.x;
+                const dy = newPos.y - existingPos.y;
+                if (dx * dx + dy * dy < minDistanceSq) {
+                    isValid = false;
+                    break;
+                }
             }
         }
-    }
-}
 
-// カーソル位置の更新 (変更なし)
-function updateCursor(newIndex) {
-    if (cells[cursorIndex]) {
-        cells[cursorIndex].classList.remove('selected');
-    }
-    cursorIndex = newIndex;
-    if (cells[cursorIndex]) {
-        cells[cursorIndex].classList.add('selected');
-    }
-}
-
-
-/**
- * 次に消えるマーク（最も古いマーク）に視覚的な強調を適用/解除する
- * @param {string} player - 対象プレイヤー ('O' or 'X')
- */
-function updateFadingMark(player) {
-    // 全てのセルからfading-outクラスを一度解除
-    cells.forEach(cell => cell.classList.remove('fading-out'));
-
-    // 既に3つマークがある場合、最も古いマークを特定して強調
-    if (marksCount[player] >= maxMarks) {
-        // placedMarksから現在のプレイヤーのマークのみを抽出
-        const playerMarks = placedMarks.filter(mark => mark.player === player);
-
-        // playerMarksは配置順に並んでいるため、0番目が最も古いマーク
-        const oldestMark = playerMarks[0];
-
-        if (oldestMark) {
-            cells[oldestMark.index].classList.add('fading-out');
+        if (isValid) {
+            positions.push(newPos);
         }
     }
+    
+    return positions.map(p => [p.x, p.y]);
 }
 
-// セルクリック（確定）時の処理
-function handleCellClick(index) {
-    if (!isGameActive || board[index] !== null) {
+const BLUE_BALL_INITIAL_POSITIONS = generateRandomPositions(NUM_OF_BLUE_BALLS, BOX_SIZE);
+
+
+// ボックスの中心座標を取得 (変更なし)
+function getBoxCenter() {
+    const x = parseFloat(box.style.left) || 0;
+    const y = parseFloat(box.style.top) || 0;
+    return {
+        x: x + BOX_SIZE / 2,
+        y: y + BOX_SIZE / 2
+    };
+}
+
+// ボックスの位置を左上隅の座標で設定 (変更なし)
+function setBoxPosition(x, y) {
+    box.style.left = `${x}px`;
+    box.style.top = `${y}px`;
+}
+
+
+// =======================================================
+// 複数の青いボールを管理するためのクラス (変更なし)
+// =======================================================
+class Ball {
+    constructor(initialX, initialY, index) { 
+        this.element = document.createElement('div');
+        this.element.className = 'blue-ball';
+        this.element.id = `ball-${index}`;
+        document.body.appendChild(this.element);
+        
+        this.center = { x: initialX, y: initialY };
+        this.radius = BOX_SIZE / 2;
+        this.velocity = { x: 0, y: 0 };
+    }
+
+    get velocityX() { return this.velocity.x; }
+    set velocityX(v) { this.velocity.x = v; }
+    get velocityY() { return this.velocity.y; }
+    set velocityY(v) { this.velocity.y = v; }
+
+    setPosition(centerX, centerY) {
+        this.center.x = centerX;
+        this.center.y = centerY;
+        this.element.style.left = `${centerX - this.radius}px`;
+        this.element.style.top = `${centerY - this.radius}px`;
+    }
+    
+    // 画面端の衝突時にカウント
+    checkWallCollision(containerWidth, containerHeight) {
+        let newCenterX = this.center.x + this.velocity.x;
+        let newCenterY = this.center.y + this.velocity.y;
+        let rebounded = false;
+
+        // X軸の衝突
+        if (newCenterX - this.radius < 0) {
+            newCenterX = this.radius;
+            this.velocity.x *= -1;
+            rebounded = true;
+        } else if (newCenterX + this.radius > containerWidth) {
+            newCenterX = containerWidth - this.radius;
+            this.velocity.x *= -1;
+            rebounded = true;
+        }
+
+        // Y軸の衝突
+        if (newCenterY - this.radius < 0) {
+            newCenterY = this.radius;
+            this.velocity.y *= -1;
+            rebounded = true;
+        } else if (newCenterY + this.radius > containerHeight) {
+            newCenterY = containerHeight - this.radius;
+            this.velocity.y *= -1;
+            rebounded = true;
+        }
+        
+        if (rebounded) {
+            reboundCount++;
+            updateReboundCountDisplay();
+        }
+        
+        this.center.x = newCenterX;
+        this.center.y = newCenterY;
+        this.setPosition(newCenterX, newCenterY);
+    }
+
+    applyFriction() {
+        this.velocity.x *= FRICTION;
+        this.velocity.y *= FRICTION;
+    }
+}
+
+
+// 赤いボックスを衝突判定ロジックで使用するためのオブジェクト
+const redBall = {
+    element: box,
+    get center() { return getBoxCenter(); },
+    radius: BOX_SIZE / 2,
+    get velocityX() { return velocityX; },
+    set velocityX(v) { velocityX = v; },
+    get velocityY() { return velocityY; },
+    set velocityY(v) { velocityY = v; },
+    
+    setPosition: function(centerX, centerY) {
+        setBoxPosition(centerX - this.radius, centerY - this.radius);
+    },
+    
+    // 赤ボックス専用の壁衝突処理でカウント
+    checkWallCollision: function(containerWidth, containerHeight) {
+        const center = getBoxCenter();
+        const radius = BOX_SIZE / 2;
+        let rebounded = false;
+
+        let newCenterX = center.x + velocityX;
+        let newCenterY = center.y + velocityY;
+
+        // X軸の衝突
+        if (newCenterX - radius < 0) {
+            newCenterX = radius;
+            velocityX *= -1;
+            rebounded = true;
+        } else if (newCenterX + radius > containerWidth) {
+            newCenterX = containerWidth - radius;
+            velocityX *= -1;
+            rebounded = true;
+        }
+
+        // Y軸の衝突
+        if (newCenterY - radius < 0) {
+            newCenterY = radius;
+            velocityY *= -1;
+            rebounded = true;
+        } else if (newCenterY + radius > containerHeight) {
+            newCenterY = containerHeight - radius;
+            velocityY *= -1;
+            rebounded = true;
+        }
+        
+        if (rebounded) {
+            reboundCount++;
+            updateReboundCountDisplay();
+        }
+
+        this.setPosition(newCenterX, newCenterY);
+    }
+};
+
+const blueBalls = [];
+BLUE_BALL_INITIAL_POSITIONS.forEach((pos, index) => {
+    const newBall = new Ball(pos[0], pos[1], index);
+    blueBalls.push(newBall);
+    newBall.setPosition(pos[0], pos[1]);
+});
+
+const allBalls = [redBall, ...blueBalls]; 
+
+// 初期位置を設定 (画面中央)
+redBall.setPosition(window.innerWidth / 2, window.innerHeight / 2);
+
+
+// =======================================================
+// 衝突判定と反発処理の関数 (変更なし)
+// =======================================================
+function checkCollisionAndRespond(ballA, ballB) {
+    const dx = ballB.center.x - ballA.center.x;
+    const dy = ballB.center.y - ballA.center.y;
+    const distanceSq = dx * dx + dy * dy;
+    const sumOfRadii = ballA.radius + ballB.radius;
+    const sumOfRadiiSq = sumOfRadii * sumOfRadii;
+
+    if (distanceSq < sumOfRadiiSq) {
+        reboundCount++;
+        updateReboundCountDisplay();
+        
+        const distance = Math.sqrt(distanceSq);
+        const overlap = sumOfRadii - distance;
+        const normalX = dx / distance;
+        const normalY = dy / distance;
+        
+        const correctionX = normalX * overlap * 0.5;
+        const correctionY = normalY * overlap * 0.5;
+
+        ballA.setPosition(ballA.center.x - correctionX, ballA.center.y - correctionY);
+        ballB.setPosition(ballB.center.x + correctionX, ballB.center.y + correctionY);
+
+        const vA_normal = ballA.velocityX * normalX + ballA.velocityY * normalY;
+        const vA_tangent = ballA.velocityX * (-normalY) + ballA.velocityY * normalX;
+        const vB_normal = ballB.velocityX * normalX + ballB.velocityY * normalY;
+        const vB_tangent = ballB.velocityX * (-normalY) + ballB.velocityY * normalX;
+
+        const vA_normal_final = vB_normal;
+        const vB_normal_final = vA_normal;
+
+        const vA_normal_vecX = vA_normal_final * normalX;
+        const vA_normal_vecY = vA_normal_final * normalY;
+        const vB_normal_vecX = vB_normal_final * normalX;
+        const vB_normal_vecY = vB_normal_final * normalY;
+
+        const vA_tangent_vecX = vA_tangent * (-normalY);
+        const vA_tangent_vecY = vA_tangent * normalX;
+        const vB_tangent_vecX = vB_tangent * (-normalY);
+        const vB_tangent_vecY = vB_tangent * normalX;
+
+        ballA.velocityX = vA_normal_vecX + vA_tangent_vecX;
+        ballA.velocityY = vA_normal_vecY + vA_tangent_vecY;
+        ballB.velocityX = vB_normal_vecX + vB_tangent_vecX;
+        ballB.velocityY = vB_normal_vecY + vB_tangent_vecY;
+    }
+}
+
+
+// ========== イベントハンドラ ==========
+
+// 1. マウス/タッチ開始時
+function handleMouseDown(e) {
+    // 💡 変更: intervalIdでチェック
+    if (intervalId !== null) return; 
+
+    isDragging = true;
+    box.style.cursor = 'grabbing';
+    
+    reboundCount = 0;
+    updateReboundCountDisplay();
+    
+    const clientX = e.clientX || e.touches[0].clientX;
+    const clientY = e.clientY || e.touches[0].clientY;
+
+    startX = clientX;
+    startY = clientY;
+    
+    const center = getBoxCenter();
+    launchCenterInitialX = center.x;
+    launchCenterInitialY = center.y;
+    boxCurrentX = parseFloat(box.style.left);
+    boxCurrentY = parseFloat(box.style.top);
+
+    arrow.style.display = 'block';
+
+    if (e.cancelable) e.preventDefault();
+}
+
+// 2. マウス/タッチ移動時 (変更なし)
+function handleMouseMove(e) {
+    if (!isDragging) return;
+
+    const clientX = e.clientX || e.touches[0].clientX;
+    const clientY = e.clientY || e.touches[0].clientY;
+
+    const deltaX = clientX - startX;
+    const deltaY = clientY - startY;
+
+    const newBoxX = boxCurrentX + deltaX;
+    const newBoxY = boxCurrentY + deltaY;
+    setBoxPosition(newBoxX, newBoxY);
+
+    const arrowVectorX = launchCenterInitialX - (newBoxX + BOX_SIZE / 2);
+    const arrowVectorY = launchCenterInitialY - (newBoxY + BOX_SIZE / 2);
+    const distance = Math.sqrt(arrowVectorX * arrowVectorX + arrowVectorY * arrowVectorY);
+    const angle = Math.atan2(arrowVectorY, arrowVectorX);
+
+    arrow.style.left = `${launchCenterInitialX}px`;
+    arrow.style.top = `${launchCenterInitialY}px`;
+    
+    arrow.style.width = `${distance}px`;
+    arrow.style.transform = `rotate(${angle}rad)`;
+    
+    if (e.cancelable) e.preventDefault();
+}
+
+// 3. マウス/タッチ終了時 (発射)
+function handleLaunch(e) {
+    if (!isDragging) return;
+
+    isDragging = false;
+    box.style.cursor = 'grab';
+    arrow.style.display = 'none';
+
+    const clientX = e.clientX || (e.changedTouches ? e.changedTouches[0].clientX : startX);
+    const clientY = e.clientY || (e.changedTouches ? e.changedTouches[0].clientY : startY);
+    
+    const dragDeltaX = clientX - startX;
+    const dragDeltaY = clientY - startY;
+
+    velocityX = -dragDeltaX * LAUNCH_MULTIPLIER;
+    velocityY = -dragDeltaY * LAUNCH_MULTIPLIER;
+
+    const center = getBoxCenter();
+    setBoxPosition(launchCenterInitialX - BOX_SIZE/2, launchCenterInitialY - BOX_SIZE/2);
+    
+    // 💡 変更: setIntervalでループを開始
+    if (intervalId === null) {
+        // 16msごとにanimateを呼び出し（約60FPS相当）
+        intervalId = setInterval(animate, 16);
+    }
+
+    if (e.cancelable) e.preventDefault();
+}
+
+// ========== アニメーションループ ==========
+
+function animate() {
+    const containerWidth = window.innerWidth;
+    const containerHeight = window.innerHeight;
+
+    // 1. 赤ボックスの位置と速度を更新
+    velocityX *= FRICTION;
+    velocityY *= FRICTION;
+    redBall.checkWallCollision(containerWidth, containerHeight);
+
+
+    // 2. 青いボールの位置と速度を更新
+    blueBalls.forEach(ball => {
+        ball.center.x += ball.velocity.x;
+        ball.center.y += ball.velocity.y;
+        
+        ball.applyFriction();
+
+        ball.checkWallCollision(containerWidth, containerHeight);
+    });
+
+    // 3. ボール同士の衝突判定と反発
+    for (let i = 0; i < allBalls.length; i++) {
+        for (let j = i + 1; j < allBalls.length; j++) {
+            checkCollisionAndRespond(allBalls[i], allBalls[j]);
+        }
+    }
+
+    // 4. 停止判定 (変更あり)
+    const isRedBallStopped = Math.abs(velocityX) < 0.1 && Math.abs(velocityY) < 0.1;
+    const isBlueBallsStopped = blueBalls.every(ball => Math.abs(ball.velocity.x) < 0.1 && Math.abs(ball.velocity.y) < 0.1);
+    
+    if (isRedBallStopped && isBlueBallsStopped) {
+        // 💡 変更: clearIntervalでループを停止
+        clearInterval(intervalId);
+        intervalId = null;
+        velocityX = 0;
+        velocityY = 0;
+        box.style.cursor = 'grab';
         return;
     }
-
-    // 1. マークの制限チェックと古いマークの削除
-    if (marksCount[currentPlayer] >= maxMarks) {
-        // プレイヤーの最も古いマークを探し、削除
-        const oldestMarkIndex = placedMarks.findIndex(mark => mark.player === currentPlayer);
-        if (oldestMarkIndex !== -1) {
-            const oldestMark = placedMarks.splice(oldestMarkIndex, 1)[0]; // 削除
-            board[oldestMark.index] = null;
-            cells[oldestMark.index].classList.remove(oldestMark.player);
-            cells[oldestMark.index].removeAttribute('data-step');
-            cells[oldestMark.index].classList.remove('fading-out'); // 強調も解除
-            marksCount[oldestMark.player]--;
-        }
-    }
-
-    // 2. 新しいマークの配置と記録
-    board[index] = currentPlayer;
-    marksCount[currentPlayer]++;
-
-    cells[index].classList.add(currentPlayer);
-    // 新しいマークを placedMarks の末尾に追加
-    placedMarks.push({ index: index, player: currentPlayer });
-
-    // 3. 視覚要素の更新 (data-step="1"～"3")
-    updateMarkVisuals(); // ★ 全てのマークのステップを正しく更新
-
-    // 4. 勝利判定 (ターン切り替えの前に移動)
-    if (checkWinner()) {
-        statusDisplay.textContent = `${currentPlayer === 'O' ? '青の〇' : '赤の✕'} の勝利！`;
-        statusDisplay.classList.remove('player1', 'player2');
-        statusDisplay.classList.add(currentPlayer === 'O' ? 'player1' : 'player2');
-        isGameActive = false;
-        cells[cursorIndex].classList.remove('selected');
-        cells.forEach(cell => cell.classList.remove('fading-out'));
-        return;
-    }
-
-    // 5. ターン切り替え
-    currentPlayer = currentPlayer === 'O' ? 'X' : 'O';
-    updateStatus();
-
-    // ターン切り替え後、次のプレイヤーの次に消えるマークを強調
-    updateFadingMark(currentPlayer);
+    // 💡 削除: requestAnimationFrame(animate) は不要
 }
 
+// ========== イベントリスナーの登録 (変更なし) ==========
 
-// ステップ（data-step）を更新し、最も古いマークの強調も管理するヘルパー関数
-function updateMarkVisuals() {
-    // 1. data-step (opacity & 数字) の更新
+box.addEventListener('mousedown', handleMouseDown);
+document.addEventListener('mousemove', handleMouseMove);
+document.addEventListener('mouseup', handleLaunch);
 
-    // 全てのセルから古い data-step を削除
-    cells.forEach(cell => cell.removeAttribute('data-step'));
-
-    // O（Player 1）のマークを配置順にフィルタリング
-    const playerOMarks = placedMarks.filter(mark => mark.player === 'O');
-    playerOMarks.forEach((mark, i) => {
-        const step = i + 1; // i=0, 1, 2 => step=1, 2, 3
-        cells[mark.index].setAttribute('data-step', step);
-    });
-
-    // X（Player 2）のマークを配置順にフィルタリング
-    const playerXMarks = placedMarks.filter(mark => mark.player === 'X');
-    playerXMarks.forEach((mark, i) => {
-        const step = i + 1; // i=0, 1, 2 => step=1, 2, 3
-        cells[mark.index].setAttribute('data-step', step);
-    });
-
-    // 2. 次に消えるマークの強調更新（handleCellClick内でターン切り替え後に行うため、ここでは省略可能）
-    // 念のため、両プレイヤーの強調をリセットし、現在のプレイヤーのマークを置いた直後の強調状態を維持
-    updateFadingMark(currentPlayer);
-}
-
-// 勝利判定ロジック (変更なし)
-const winningConditions = [
-    [0, 1, 2], [3, 4, 5], [6, 7, 8], // 横
-    [0, 3, 6], [1, 4, 7], [2, 5, 8], // 縦
-    [0, 4, 8], [2, 4, 6]             // 斜め
-];
-
-function checkWinner() {
-    for (let i = 0; i < winningConditions.length; i++) {
-        const [a, b, c] = winningConditions[i];
-        if (board[a] && board[a] === board[b] && board[a] === board[c]) {
-            return true;
-        }
-    }
-    return false;
-}
-
-// 状態表示の更新 (変更なし)
-function updateStatus() {
-    statusDisplay.textContent = `${currentPlayer === 'O' ? '青の〇' : '赤の✕'} の番です`;
-    statusDisplay.classList.remove('player1', 'player2');
-    statusDisplay.classList.add(currentPlayer === 'O' ? 'player1' : 'player2');
-    countInfoDisplay.textContent = `〇: ${marksCount['O']} / ${maxMarks} | ✕: ${marksCount['X']} / ${maxMarks}`;
-}
-
-// ゲームのリセット
-function resetGame() {
-    board.fill(null);
-    cells.forEach(cell => {
-        cell.classList.remove('O', 'X', 'selected', 'fading-out'); // fading-outもリセット
-        cell.removeAttribute('data-step');
-    });
-    currentPlayer = 'O';
-    isGameActive = true;
-    marksCount = { 'O': 0, 'X': 0 };
-    placedMarks = [];
-    cursorIndex = 4;
-    updateCursor(cursorIndex);
-    updateStatus();
-
-    // リセット時、fading-outはなし
-
-    if (navigator.getGamepads().filter(g => g).length > 0) {
-        gameLoop();
-    }
-}
-
-// 初期化
-resetButton.addEventListener('click', resetGame);
-updateStatus();
-updateCursor(cursorIndex);
-// ゲーム開始時、どちらのプレイヤーもマークが0個なのでfading-outは適用されない
+box.addEventListener('touchstart', handleMouseDown);
+document.addEventListener('touchmove', handleMouseMove);
+document.addEventListener('touchend', handleLaunch);

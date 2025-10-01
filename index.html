@@ -1,36 +1,20 @@
 <!DOCTYPE html>
 <html lang="ja">
+
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>コントローラー式 〇✕ゲーム</title>
+    <title>Monst-like Drag Launch</title>
     <link rel="stylesheet" href="style.css">
 </head>
+
 <body>
-
-    <div id="game-container">
-        <h1>コントローラー式 〇✕ゲーム</h1>
-        <div id="status">
-            <p id="player-turn"></p>
-            <p id="count-info"></p>
-        </div>
-
-        <div id="board" class="size-3">
-            <div class="cell" data-index="0"></div>
-            <div class="cell" data-index="1"></div>
-            <div class="cell" data-index="2"></div>
-            <div class="cell" data-index="3"></div>
-            <div class="cell" data-index="4"></div>
-            <div class="cell" data-index="5"></div>
-            <div class="cell" data-index="6"></div>
-            <div class="cell" data-index="7"></div>
-            <div class="cell" data-index="8"></div>
-        </div>
-
-        <button id="reset-button">リセット</button>
-        <p id="gamepad-status">ゲームパッドを接続してください...</p>
-    </div>
+    <div id="box"></div>
+    <div id="arrow"></div>
+    
+    <div id="rebound-counter">0</div>
 
     <script src="script.js"></script>
 </body>
+
 </html>
